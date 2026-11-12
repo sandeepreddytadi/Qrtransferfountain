@@ -125,6 +125,15 @@
     }
     #statusPill.active { color: #38bdf8; }
     #statusPill.done   { background: #14532d; color: #86efac; }
+    #statusPill.failed { background: #450a0a; color: #fca5a5; }
+
+    #scanMetrics {
+      margin-top: 8px;
+      color: #94a3b8;
+      font-size: 0.72rem;
+      line-height: 1.6;
+      text-align: center;
+    }
 
     /* Progress bar */
     .prog-wrap { margin-top: 14px; }
@@ -170,6 +179,8 @@
     #doneState .icon { font-size: 4rem; display: block; margin-bottom: 12px; }
     #doneState h2 { font-size: 1.2rem; color: #86efac; margin-bottom: 6px; }
     #doneState p  { font-size: 0.8rem; color: #4ade80; margin-bottom: 20px; }
+    #doneState.failed { background: #2a1010; border-color: #dc2626; }
+    #doneState.failed h2, #doneState.failed p { color: #fca5a5; }
     .btn-again {
       padding: 10px 30px;
       background: #166534; color: #86efac;
@@ -226,6 +237,10 @@
   </div>
 
   <div id="statusPill">Waiting for QR…</div>
+  <div id="scanMetrics">
+    <div id="scanQuality">QR readability: waiting for camera</div>
+    <div id="etaText">ETA: waiting for the first symbol</div>
+  </div>
 
   <div class="prog-wrap">
     <div class="prog-label">
@@ -239,12 +254,13 @@
     <div id="gridLabel">Reconstructed blocks</div>
     <div id="frameGrid"></div>
   </div>
+  <button class="btn-start" id="cancelBtn" type="button">Cancel receive</button>
 </div>
 
 <!-- Done -->
 <div id="doneState">
   <span class="icon">✅</span>
-  <h2>Transfer complete!</h2>
+  <h2 id="doneTitle">Transfer complete!</h2>
   <p id="doneInfo">File saved.</p>
   <button class="btn-again" onclick="location.reload()">Receive another file</button>
 </div>
@@ -259,19 +275,25 @@
 
 <script src="fountain.js"></script>
 <script>
-  const PREFIX = 'QRFT2|';
+  const PREFIX = 'QRFT3|';
 
   let session      = null;
   let totalFrames  = null;
   let fileSize     = null;
+  let fileChecksum = null;
   let fileName     = 'received_file';
   let decoder      = null;
   let receivedCount = 0;
+  let receiveStartedAt = null;
+  let receiveRunId = 0;
   let scanning     = true;
   let videoStream  = null;
   let wakeLock     = null;
   let scanBusy     = false;
   let lastScanAt   = 0;
+  let scanWindowStartedAt = performance.now();
+  let scanAttempts = 0;
+  let scanDetections = 0;
   const MAX_SCAN_WIDTH = 960;
   const SCAN_INTERVAL_MS = 50;
   let qrDetector = null;
@@ -286,6 +308,7 @@
 
   // ── Start camera ────────────────────────────────────────────
   document.getElementById('startBtn').addEventListener('click', startCamera);
+  document.getElementById('cancelBtn').addEventListener('click', cancelReceive);
 
   async function startCamera() {
     try {
@@ -299,9 +322,16 @@
       video.srcObject = videoStream;
       await video.play();
       requestWakeLock();
+      scanning = true;
+      scanWindowStartedAt = performance.now();
+      scanAttempts = 0;
+      scanDetections = 0;
+      document.getElementById('scanQuality').textContent = 'QR readability: checking camera';
+      document.getElementById('etaText').textContent = 'ETA: waiting for the first symbol';
       setPhase('scan');
       requestAnimationFrame(scanLoop);
     } catch (e) {
+      scanning = false;
       const isFile = location.protocol === 'file:';
       const hint   = isFile
         ? ' — Opening from a file:// URL blocks the camera in Chrome/Safari. Use Firefox, or serve this file over HTTPS/localhost.'
@@ -319,10 +349,14 @@
         video.readyState >= video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
       lastScanAt = now;
       scanBusy = true;
+      scanAttempts++;
       try {
         if (qrDetector) {
           const codes = await qrDetector.detect(video);
-          if (codes.length) processFrame(codes[0].rawValue);
+          if (codes.length) {
+            recordQrDetection();
+            processFrame(codes[0].rawValue);
+          }
         } else {
           const scale = Math.min(1, MAX_SCAN_WIDTH / video.videoWidth);
           const width = Math.round(video.videoWidth * scale);
@@ -338,12 +372,16 @@
           const code = jsQR(imageData.data, width, height, {
             inversionAttempts: 'dontInvert',
           });
-          if (code) processFrame(code.data);
+          if (code) {
+            recordQrDetection();
+            processFrame(code.data);
+          }
         }
       } catch (e) {
         qrDetector = null;
       } finally {
         scanBusy = false;
+        updateScanQuality();
       }
     }
 
@@ -364,13 +402,13 @@
     if (!raw.startsWith(PREFIX)) return;
 
     const parts = raw.split('|');
-    if (parts.length !== 7) return;
+    if (parts.length !== 8) return;
 
-    const [, sid, symbolHex, totalHex, sizeHex, fnameEnc, b64] = parts;
+    const [, sid, symbolHex, totalHex, sizeHex, checksum, fnameEnc, b64] = parts;
     const symbolId = parseInt(symbolHex, 16);
     const total = parseInt(totalHex, 16);
     const size = parseInt(sizeHex, 16);
-    if (!Number.isInteger(symbolId) || !Number.isInteger(total) || total < 1 ||
+    if (!/^[\da-f]{64}$/i.test(checksum) || !Number.isInteger(symbolId) || !Number.isInteger(total) || total < 1 ||
         !Number.isSafeInteger(size) || size < 0 || Math.max(1, Math.ceil(size / 300)) !== total) return;
 
     // Bind or verify session
@@ -378,9 +416,10 @@
       session     = sid;
       totalFrames = total;
       fileSize    = size;
+      fileChecksum = checksum.toLowerCase();
       decoder     = FountainCodec.createDecoder(total, 300);
       buildGrid(total);
-    } else if (session !== sid || totalFrames !== total || fileSize !== size) {
+    } else if (session !== sid || totalFrames !== total || fileSize !== size || fileChecksum !== checksum.toLowerCase()) {
       return; // different transfer, ignore
     }
 
@@ -396,6 +435,7 @@
 
     const result = decoder.add(symbolId, data);
     if (result.duplicate) return;
+    if (receiveStartedAt === null) receiveStartedAt = performance.now();
     receivedCount++;
 
     flashCamera();
@@ -406,10 +446,10 @@
   }
 
   // ── Finalize ─────────────────────────────────────────────────
-  function finalize() {
+  async function finalize() {
     scanning = false;
-    if (wakeLock) wakeLock.release();
-    if (videoStream) videoStream.getTracks().forEach(t => t.stop());
+    const finalizingRunId = receiveRunId;
+    stopCamera();
 
     const out = new Uint8Array(fileSize);
     let off = 0;
@@ -419,6 +459,30 @@
       off += block.length;
     }
 
+    let verified = false;
+    try {
+      const digest = await crypto.subtle.digest('SHA-256', out);
+      const digestHex = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+      verified = digestHex === fileChecksum;
+    } catch {}
+    if (finalizingRunId !== receiveRunId) return;
+
+    const elapsedSeconds = Math.max(0.001, (performance.now() - receiveStartedAt) / 1000);
+    const doneState = document.getElementById('doneState');
+    const doneTitle = document.getElementById('doneTitle');
+    const doneInfo = document.getElementById('doneInfo');
+    doneState.classList.remove('failed');
+    if (!verified) {
+      doneState.classList.add('failed');
+      doneTitle.textContent = 'Integrity check failed';
+      doneInfo.textContent = `${fileName} was not downloaded because its SHA-256 checksum did not match.`;
+      setPhase('done');
+      const pill = document.getElementById('statusPill');
+      pill.classList.add('failed');
+      pill.textContent = '❌ SHA-256 verification failed';
+      return;
+    }
+
     const blob = new Blob([out]);
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
@@ -426,9 +490,11 @@
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 10000);
 
-    document.getElementById('doneInfo').textContent =
-      `${fileName}  ·  ${fmt(fileSize)}  ·  ${receivedCount} symbols scanned`;
+    doneTitle.textContent = 'Transfer complete and verified';
+    doneInfo.textContent =
+      `${fileName} · ${fmt(fileSize)} · ${receivedCount} symbols · ${fmtDuration(elapsedSeconds)} · ${fmtRate(fileSize / elapsedSeconds)} · SHA-256 verified`;
     setPhase('done');
+    document.getElementById('statusPill').textContent = '✅ File verified';
   }
 
   // ── UI helpers ───────────────────────────────────────────────
@@ -458,6 +524,72 @@
     const pill = document.getElementById('statusPill');
     pill.classList.add('active');
     pill.textContent = `✓ ${got}/${total} blocks  •  ${symbols} symbols`;
+    updateEta(got, total);
+  }
+
+  function updateEta(got, total) {
+    const etaText = document.getElementById('etaText');
+    if (!receiveStartedAt || got < 1) {
+      etaText.textContent = 'ETA: estimating from incoming symbols';
+      return;
+    }
+    if (got >= total) {
+      etaText.textContent = 'ETA: verifying file…';
+      return;
+    }
+    const elapsedSeconds = Math.max(0.1, (performance.now() - receiveStartedAt) / 1000);
+    const blocksPerSecond = got / elapsedSeconds;
+    etaText.textContent = `ETA: about ${fmtDuration((total - got) / blocksPerSecond)}`;
+  }
+
+  function recordQrDetection() {
+    scanDetections++;
+  }
+
+  function updateScanQuality() {
+    const now = performance.now();
+    const elapsedMs = now - scanWindowStartedAt;
+    if (elapsedMs < 2000) return;
+    const percent = scanAttempts ? Math.round((scanDetections / scanAttempts) * 100) : 0;
+    const quality = percent >= 60 ? 'Good' : percent >= 25 ? 'Fair' : 'Low';
+    document.getElementById('scanQuality').textContent =
+      `QR readability: ${quality} · ${percent}% of camera checks`;
+    scanWindowStartedAt = now;
+    scanAttempts = 0;
+    scanDetections = 0;
+  }
+
+  function cancelReceive() {
+    receiveRunId++;
+    scanning = false;
+    stopCamera();
+    session = null;
+    totalFrames = null;
+    fileSize = null;
+    fileChecksum = null;
+    fileName = 'received_file';
+    decoder = null;
+    receivedCount = 0;
+    receiveStartedAt = null;
+    frameGrid.innerHTML = '';
+    showErr('');
+    document.getElementById('statusPill').classList.remove('active', 'done', 'failed');
+    document.getElementById('statusPill').textContent = 'Waiting for QR…';
+    document.getElementById('scanQuality').textContent = 'QR readability: waiting for camera';
+    document.getElementById('etaText').textContent = 'ETA: waiting for the first symbol';
+    setPhase('idle');
+  }
+
+  function stopCamera() {
+    if (wakeLock) {
+      wakeLock.release().catch(() => {});
+      wakeLock = null;
+    }
+    if (videoStream) {
+      videoStream.getTracks().forEach(track => track.stop());
+      videoStream = null;
+    }
+    video.srcObject = null;
   }
 
   function flashCamera() {
@@ -494,6 +626,18 @@
     if (b < 1024)        return b + ' B';
     if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
     return (b / 1024 / 1024).toFixed(1) + ' MB';
+  }
+
+  function fmtDuration(seconds) {
+    if (seconds < 60) return `${seconds < 10 ? seconds.toFixed(1) : Math.ceil(seconds)} sec`;
+    const minutes = Math.floor(seconds / 60);
+    const remainder = Math.ceil(seconds % 60);
+    if (minutes < 60) return `${minutes} min ${remainder} sec`;
+    return `${Math.floor(minutes / 60)} hr ${minutes % 60} min`;
+  }
+
+  function fmtRate(bytesPerSecond) {
+    return `${fmt(bytesPerSecond)}/s`;
   }
 
   // Library check

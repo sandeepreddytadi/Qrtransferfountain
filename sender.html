@@ -61,6 +61,7 @@ var QRCode=function(t){"use strict";var r,e=function(){return"function"==typeof 
     /* ── Generating ── */
     #genState { display: none; width: 100%; max-width: 380px; text-align: center; }
     #genState h2 { font-size: 1rem; color: #94a3b8; margin-bottom: 16px; }
+    #genSummary { font-size: 0.78rem; color: #38bdf8; margin: -6px 0 12px; line-height: 1.5; }
     .progress-bar { width: 100%; height: 6px; background: #1e293b; border-radius: 99px; overflow: hidden; }
     .progress-fill { height: 100%; background: #38bdf8; border-radius: 99px; width: 0; transition: width .15s; }
     #genLabel { font-size: 0.75rem; color: #475569; margin-top: 8px; font-family: monospace; }
@@ -73,6 +74,7 @@ var QRCode=function(t){"use strict";var r,e=function(){return"function"==typeof 
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     #fileInfo span { color: #38bdf8; }
+    #streamEstimate { font-size: 0.72rem; color: #64748b; margin: -8px 0 12px; }
 
     /* QR wrapper with scanning animation */
     .qr-wrap {
@@ -204,17 +206,18 @@ var QRCode=function(t){"use strict";var r,e=function(){return"function"==typeof 
 <div id="dropzone" onclick="document.getElementById('fileInput').click()">
   <span class="icon">📂</span>
   <h2>Drop a file here</h2>
-  <p>or click to choose one</p>
-  <p style="margin-top:8px">Works best under 500 KB</p>
+  <p>or click to choose files</p>
+  <p style="margin-top:8px">Multiple files are packed into a ZIP · Works best under 500 KB</p>
   <button class="btn-pick" onclick="event.stopPropagation(); document.getElementById('fileInput').click()">
     Choose File
   </button>
-  <input type="file" id="fileInput" />
+  <input type="file" id="fileInput" multiple />
 </div>
 
 <!-- Generating phase -->
 <div id="genState">
   <h2>⚙️ Preparing file blocks…</h2>
+  <div id="genSummary"></div>
   <div class="progress-bar"><div class="progress-fill" id="genFill"></div></div>
   <div id="genLabel">0 / 0</div>
 </div>
@@ -225,6 +228,7 @@ var QRCode=function(t){"use strict";var r,e=function(){return"function"==typeof 
 <!-- Streaming phase -->
 <div id="streamState">
   <div id="fileInfo">Loading…</div>
+  <div id="streamEstimate"></div>
 
   <div class="qr-wrap" id="qrWrap">
     <canvas id="qrCanvas" width="320" height="320"></canvas>
@@ -262,12 +266,14 @@ var QRCode=function(t){"use strict";var r,e=function(){return"function"==typeof 
   <b>Tip:</b> Hold the phone 20–40 cm from the screen. Both devices need good lighting.
 </div>
 
+<script src="jszip.min.js"></script>
 <script src="fountain.js"></script>
 <script>
   let sourceBlocks = [];
   let transferSession = '';
   let transferName = '';
   let transferSize = 0;
+  let transferChecksum = '';
   let runId = 0;
   const qrCanvas = document.createElement('canvas');
   const CHUNK_BYTES = 300;
@@ -285,11 +291,46 @@ var QRCode=function(t){"use strict";var r,e=function(){return"function"==typeof 
   dropzone.addEventListener('dragleave', () => dropzone.classList.remove('over'));
   dropzone.addEventListener('drop', e => {
     e.preventDefault(); dropzone.classList.remove('over');
-    const f = e.dataTransfer.files[0]; if (f) processFile(f);
+    processFiles(e.dataTransfer.files);
   });
   document.getElementById('fileInput').addEventListener('change', e => {
-    const f = e.target.files[0]; if (f) processFile(f);
+    processFiles(e.target.files);
   });
+
+  async function processFiles(files) {
+    const selectedFiles = Array.from(files);
+    if (!selectedFiles.length) return;
+    if (selectedFiles.length === 1) {
+      await processFile(selectedFiles[0]);
+      return;
+    }
+    if (typeof JSZip === 'undefined') {
+      showErr('ZIP support failed to load. Make sure jszip.min.js is available.');
+      return;
+    }
+
+    showErr('');
+    setPhase('gen');
+    document.getElementById('genSummary').textContent = `Packing ${selectedFiles.length} files into a ZIP…`;
+    const zip = new JSZip();
+    selectedFiles.forEach((file, index) => {
+      zip.file(`${String(index + 1).padStart(2, '0')}-${file.name}`, file);
+    });
+
+    try {
+      const zipBytes = await zip.generateAsync(
+        { type: 'uint8array', compression: 'DEFLATE', compressionOptions: { level: 6 } },
+        progress => {
+          document.getElementById('genFill').style.width = `${Math.round(progress.percent)}%`;
+          document.getElementById('genLabel').textContent = `Packing ZIP… ${Math.round(progress.percent)}%`;
+        }
+      );
+      await processFile(new File([zipBytes], 'qr-transfer.zip', { type: 'application/zip' }));
+    } catch (error) {
+      setPhase('idle');
+      showErr(`Could not create ZIP: ${error.message}`);
+    }
+  }
 
   // ── Process file ────────────────────────────────────────────
   async function processFile(file) {
@@ -299,9 +340,12 @@ var QRCode=function(t){"use strict";var r,e=function(){return"function"==typeof 
     }
 
     setPhase('gen');
+    const total = Math.max(1, Math.ceil(file.size / CHUNK_BYTES));
+    updateEstimate(total);
     const buf    = await file.arrayBuffer();
     const bytes  = new Uint8Array(buf);
-    const total  = Math.max(1, Math.ceil(bytes.length / CHUNK_BYTES));
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    transferChecksum = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
     totalFrames  = total;
     transferSession = sessionId();
     transferName = file.name;
@@ -332,13 +376,14 @@ var QRCode=function(t){"use strict";var r,e=function(){return"function"==typeof 
     document.getElementById('pausedBanner').style.display = 'none';
     document.getElementById('fileInfo').innerHTML =
       `📄 <span>${escHtml(name)}</span> &nbsp;·&nbsp; ${fmt(size)} &nbsp;·&nbsp; ${total} source blocks`;
+    updateEstimate(total);
     showQRFrame(0, runId).then(scheduleNext).catch(err => showErr(err.message));
   }
 
   async function showQRFrame(idx, currentRun = runId) {
     const coded = FountainCodec.encode(idx, sourceBlocks, CHUNK_BYTES);
     const fname = idx === 0 || idx % 64 === 0 ? encodeURIComponent(transferName) : '';
-    const payload = `QRFT2|${transferSession}|${hex8(idx)}|${hex8(totalFrames)}|${hex8(transferSize)}|${fname}|${u8ToB64(coded)}`;
+    const payload = `QRFT3|${transferSession}|${hex8(idx)}|${hex8(totalFrames)}|${hex8(transferSize)}|${transferChecksum}|${fname}|${u8ToB64(coded)}`;
     const qr = await makeQR(payload);
     if (currentRun !== runId || paused) return;
 
@@ -394,6 +439,7 @@ var QRCode=function(t){"use strict";var r,e=function(){return"function"==typeof 
     btn.addEventListener('click', () => {
       fps = parseInt(btn.dataset.fps);
       document.querySelectorAll('.fps-btn').forEach(b => b.classList.toggle('active', b === btn));
+      if (totalFrames) updateEstimate(totalFrames);
       if (!paused) { clearTimeout(timer); scheduleNext(); }
     });
   });
@@ -430,6 +476,20 @@ var QRCode=function(t){"use strict";var r,e=function(){return"function"==typeof 
     if (b < 1024)        return b + ' B';
     if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
     return (b / 1024 / 1024).toFixed(1) + ' MB';
+  }
+
+  function updateEstimate(total) {
+    const estimate = `${total} source symbols · best-case ${fmtDuration(total / fps)} at ${fps} fps; repair symbols may add time`;
+    document.getElementById('genSummary').textContent = estimate;
+    document.getElementById('streamEstimate').textContent = estimate;
+  }
+
+  function fmtDuration(seconds) {
+    if (seconds < 60) return `${seconds < 10 ? seconds.toFixed(1) : Math.ceil(seconds)} sec`;
+    const minutes = Math.floor(seconds / 60);
+    const remainder = Math.ceil(seconds % 60);
+    if (minutes < 60) return `${minutes} min ${remainder} sec`;
+    return `${Math.floor(minutes / 60)} hr ${minutes % 60} min`;
   }
 
   function escHtml(s) {

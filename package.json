@@ -1,0 +1,16 @@
+{
+  "name": "qr-file-transfer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local-network QR file transfer",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "jszip": "3.10.1"
+  }
+}
