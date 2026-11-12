@@ -36,3 +36,25 @@ test('handles a one-block file', () => {
   assert.equal(decoder.complete, true);
   assert.deepEqual(decoder.blocks[0], source[0]);
 });
+
+test('reconstructs a 2 MiB file with 1,800-byte symbols and missed QR frames', () => {
+  const fileSize = 2 * 1024 * 1024;
+  const blockSize = 1800;
+  const sourceCount = Math.ceil(fileSize / blockSize);
+  const sourceBlocks = Array.from({ length: sourceCount }, (_, index) => {
+    const block = new Uint8Array(blockSize);
+    for (let byte = 0; byte < blockSize; byte++) block[byte] = (index * 31 + byte * 17) & 255;
+    return block;
+  });
+  const decoder = createDecoder(sourceCount, blockSize);
+
+  for (let symbolId = 0; symbolId < sourceCount * 3 && !decoder.complete; symbolId++) {
+    if (symbolId % 5 === 0) continue;
+    decoder.add(symbolId, encode(symbolId, sourceBlocks, blockSize));
+  }
+
+  assert.equal(decoder.complete, true);
+  for (let index = 0; index < sourceCount; index++) {
+    assert.deepEqual(decoder.blocks[index], sourceBlocks[index]);
+  }
+});

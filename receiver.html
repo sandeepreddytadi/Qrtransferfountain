@@ -189,6 +189,29 @@
     }
     .btn-again:hover { background: #15803d; }
 
+    #downloadList {
+      display: grid;
+      gap: 8px;
+      width: 100%;
+      max-width: 380px;
+      margin: 0 auto 18px;
+      text-align: left;
+    }
+    #downloadList a {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border: 1px solid #1e3a5f;
+      border-radius: 8px;
+      color: #bae6fd;
+      background: #0d1b2e;
+      font-size: 0.8rem;
+      text-decoration: none;
+      overflow-wrap: anywhere;
+    }
+    #downloadList a span { color: #64748b; white-space: nowrap; }
+
     /* Error */
     #errMsg {
       display: none;
@@ -262,6 +285,7 @@
   <span class="icon">✅</span>
   <h2 id="doneTitle">Transfer complete!</h2>
   <p id="doneInfo">File saved.</p>
+  <div id="downloadList"></div>
   <button class="btn-again" onclick="location.reload()">Receive another file</button>
 </div>
 
@@ -273,9 +297,11 @@
   The sender keeps creating repair symbols, so missed QR codes do not need to be rescanned.
 </div>
 
+<script src="jszip.min.js"></script>
 <script src="fountain.js"></script>
 <script>
   const PREFIX = 'QRFT3|';
+  const CHUNK_BYTES = 1800;
 
   let session      = null;
   let totalFrames  = null;
@@ -295,7 +321,7 @@
   let scanAttempts = 0;
   let scanDetections = 0;
   const MAX_SCAN_WIDTH = 960;
-  const SCAN_INTERVAL_MS = 50;
+  const SCAN_INTERVAL_MS = 30;
   let qrDetector = null;
   try {
     if ('BarcodeDetector' in window) qrDetector = new BarcodeDetector({ formats: ['qr_code'] });
@@ -317,6 +343,7 @@
           facingMode: { ideal: 'environment' },
           width:  { ideal: 1280 },
           height: { ideal: 720 },
+          frameRate: { ideal: 30 },
         }
       });
       video.srcObject = videoStream;
@@ -409,7 +436,7 @@
     const total = parseInt(totalHex, 16);
     const size = parseInt(sizeHex, 16);
     if (!/^[\da-f]{64}$/i.test(checksum) || !Number.isInteger(symbolId) || !Number.isInteger(total) || total < 1 ||
-        !Number.isSafeInteger(size) || size < 0 || Math.max(1, Math.ceil(size / 300)) !== total) return;
+      !Number.isSafeInteger(size) || size < 0 || Math.max(1, Math.ceil(size / CHUNK_BYTES)) !== total) return;
 
     // Bind or verify session
     if (session === null) {
@@ -417,7 +444,7 @@
       totalFrames = total;
       fileSize    = size;
       fileChecksum = checksum.toLowerCase();
-      decoder     = FountainCodec.createDecoder(total, 300);
+      decoder     = FountainCodec.createDecoder(total, CHUNK_BYTES);
       buildGrid(total);
     } else if (session !== sid || totalFrames !== total || fileSize !== size || fileChecksum !== checksum.toLowerCase()) {
       return; // different transfer, ignore
@@ -431,7 +458,7 @@
     try {
       data = b64ToU8(b64);
     } catch { return; }
-    if (data.length !== 300) return;
+    if (data.length !== CHUNK_BYTES) return;
 
     const result = decoder.add(symbolId, data);
     if (result.duplicate) return;
@@ -483,16 +510,46 @@
       return;
     }
 
-    const blob = new Blob([out]);
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href = url; a.download = fileName;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    if (fileName === 'qrft-transfer-bundle.zip') {
+      try {
+        const bundle = await JSZip.loadAsync(out);
+        const files = Object.values(bundle.files).filter(file => !file.dir);
+        if (!files.length) throw new Error('The ZIP contains no files.');
 
-    doneTitle.textContent = 'Transfer complete and verified';
-    doneInfo.textContent =
-      `${fileName} · ${fmt(fileSize)} · ${receivedCount} symbols · ${fmtDuration(elapsedSeconds)} · ${fmtRate(fileSize / elapsedSeconds)} · SHA-256 verified`;
+        const downloadList = document.getElementById('downloadList');
+        downloadList.replaceChildren();
+        for (const file of files) {
+          const blob = await file.async('blob');
+          const link = document.createElement('a');
+          const name = file.name.split(/[\\/]/).pop().replace(/^\d+-/, '') || 'received_file';
+          link.href = URL.createObjectURL(blob);
+          link.download = name;
+          link.textContent = name;
+          const size = document.createElement('span');
+          size.textContent = fmt(blob.size);
+          link.appendChild(size);
+          downloadList.appendChild(link);
+        }
+
+        doneTitle.textContent = `${files.length} files received and verified`;
+        doneInfo.textContent = `${receivedCount} symbols · ${fmtDuration(elapsedSeconds)} · ${fmtRate(fileSize / elapsedSeconds)}. Select each file below to download.`;
+      } catch (error) {
+        doneState.classList.add('failed');
+        doneTitle.textContent = 'Could not open transferred files';
+        doneInfo.textContent = `The transfer checksum is valid, but the ZIP could not be extracted: ${error.message}`;
+      }
+    } else {
+      const blob = new Blob([out]);
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url; a.download = fileName;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+      doneTitle.textContent = 'Transfer complete and verified';
+      doneInfo.textContent =
+        `${fileName} · ${fmt(fileSize)} · ${receivedCount} symbols · ${fmtDuration(elapsedSeconds)} · ${fmtRate(fileSize / elapsedSeconds)} · SHA-256 verified`;
+    }
     setPhase('done');
     document.getElementById('statusPill').textContent = '✅ File verified';
   }

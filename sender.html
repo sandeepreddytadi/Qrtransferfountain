@@ -67,7 +67,7 @@ var QRCode=function(t){"use strict";var r,e=function(){return"function"==typeof 
     #genLabel { font-size: 0.75rem; color: #475569; margin-top: 8px; font-family: monospace; }
 
     /* ── Stream ── */
-    #streamState { display: none; width: 100%; max-width: 400px; text-align: center; }
+    #streamState { display: none; width: 100%; max-width: 460px; text-align: center; }
 
     #fileInfo {
       font-size: 0.8rem; color: #64748b; margin-bottom: 14px;
@@ -88,7 +88,9 @@ var QRCode=function(t){"use strict";var r,e=function(){return"function"==typeof 
     }
     #qrCanvas {
       display: block;
-      width: 320px; height: 320px;
+      width: min(440px, calc(100vw - 32px));
+      height: auto;
+      aspect-ratio: 1;
       image-rendering: pixelated;
     }
     /* Scan line overlay */
@@ -231,7 +233,7 @@ var QRCode=function(t){"use strict";var r,e=function(){return"function"==typeof 
   <div id="streamEstimate"></div>
 
   <div class="qr-wrap" id="qrWrap">
-    <canvas id="qrCanvas" width="320" height="320"></canvas>
+    <canvas id="qrCanvas" width="480" height="480"></canvas>
     <div class="scan-line"></div>
   </div>
 
@@ -249,7 +251,7 @@ var QRCode=function(t){"use strict";var r,e=function(){return"function"==typeof 
     <button class="fps-btn" data-fps="3">3 fps</button>
     <button class="fps-btn" data-fps="8">8 fps</button>
     <button class="fps-btn" data-fps="15">15 fps</button>
-    <button class="fps-btn active" data-fps="25">25 fps</button>
+    <button class="fps-btn active" data-fps="30">30 fps</button>
   </div>
 
   <div class="ctrl-row">
@@ -276,8 +278,8 @@ var QRCode=function(t){"use strict";var r,e=function(){return"function"==typeof 
   let transferChecksum = '';
   let runId = 0;
   const qrCanvas = document.createElement('canvas');
-  const CHUNK_BYTES = 300;
-  const DEFAULT_FPS = 25;
+  const CHUNK_BYTES = 1800;
+  const DEFAULT_FPS = 30;
 
   let frameIdx  = 0;
   let fps       = DEFAULT_FPS;
@@ -325,7 +327,7 @@ var QRCode=function(t){"use strict";var r,e=function(){return"function"==typeof 
           document.getElementById('genLabel').textContent = `Packing ZIP… ${Math.round(progress.percent)}%`;
         }
       );
-      await processFile(new File([zipBytes], 'qr-transfer.zip', { type: 'application/zip' }));
+      await processFile(new File([zipBytes], 'qrft-transfer-bundle.zip', { type: 'application/zip' }));
     } catch (error) {
       setPhase('idle');
       showErr(`Could not create ZIP: ${error.message}`);
