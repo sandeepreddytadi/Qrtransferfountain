@@ -301,7 +301,7 @@
 <script src="fountain.js"></script>
 <script>
   const PREFIX = 'QRFT3|';
-  const CHUNK_BYTES = 1800;
+  const CHUNK_BYTES = 900;
 
   let session      = null;
   let totalFrames  = null;
@@ -320,7 +320,7 @@
   let scanWindowStartedAt = performance.now();
   let scanAttempts = 0;
   let scanDetections = 0;
-  const MAX_SCAN_WIDTH = 960;
+  const MAX_SCAN_WIDTH = 1280;
   const SCAN_INTERVAL_MS = 30;
   let qrDetector = null;
   try {
@@ -426,7 +426,18 @@
 
   // ── Process decoded frame ────────────────────────────────────
   function processFrame(raw) {
-    if (!raw.startsWith(PREFIX)) return;
+    if (!raw.startsWith(PREFIX)) {
+      if (raw.startsWith('QRFT')) {
+        const pill = document.getElementById('statusPill');
+        pill.classList.add('failed');
+        pill.textContent = 'Incompatible sender version. Open sender and receiver from the same Fountain folder.';
+      }
+      return;
+    }
+
+    const pill = document.getElementById('statusPill');
+    pill.classList.remove('failed');
+    pill.textContent = 'QR symbol detected; reading transfer…';
 
     const parts = raw.split('|');
     if (parts.length !== 8) return;
