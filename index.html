@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QR File Transfer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0f172a;
+      color: #f1f5f9;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+    header h1 { font-size: 1.75rem; font-weight: 700; color: #e2e8f0; }
+    header p  { color: #94a3b8; font-size: 0.9rem; margin-top: 6px; }
+
+    /* ── Drop Zone ── */
+    #dropzone {
+      width: 100%;
+      max-width: 480px;
+      border: 2px dashed #334155;
+      border-radius: 16px;
+      padding: 48px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+      background: #1e293b;
+    }
+    #dropzone.dragover { border-color: #6366f1; background: #1e1b4b; }
+    #dropzone .icon { font-size: 3rem; margin-bottom: 12px; }
+    #dropzone h2 { font-size: 1.1rem; color: #cbd5e1; }
+    #dropzone p  { font-size: 0.82rem; color: #64748b; margin-top: 6px; }
+    #fileInput { display: none; }
+
+    .btn {
+      display: inline-block;
+      margin-top: 18px;
+      padding: 10px 24px;
+      background: #6366f1;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: background .2s;
+    }
+    .btn:hover { background: #4f46e5; }
+    .btn:disabled { background: #334155; cursor: not-allowed; }
+
+    /* ── Progress ── */
+    #progressWrap {
+      display: none;
+      width: 100%;
+      max-width: 480px;
+      margin-top: 24px;
+      background: #1e293b;
+      border-radius: 12px;
+      padding: 20px;
+    }
+    #progressLabel { font-size: 0.85rem; color: #94a3b8; margin-bottom: 8px; }
+    #progressBar {
+      width: 100%;
+      height: 6px;
+      background: #334155;
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    #progressFill {
+      height: 100%;
+      background: #6366f1;
+      border-radius: 99px;
+      width: 0%;
+      transition: width .1s;
+    }
+
+    /* ── Result Card ── */
+    #result {
+      display: none;
+      width: 100%;
+      max-width: 480px;
+      margin-top: 24px;
+      background: #1e293b;
+      border-radius: 16px;
+      padding: 24px;
+      text-align: center;
+    }
+
+    #result h3 { font-size: 1rem; color: #a5f3fc; margin-bottom: 4px; }
+    #result .filename { font-size: 0.85rem; color: #64748b; margin-bottom: 20px; }
+
+    #qrImg {
+      width: 200px;
+      height: 200px;
+      border-radius: 12px;
+      background: #fff;
+      padding: 8px;
+      margin: 0 auto 16px;
+      display: block;
+    }
+
+    .url-box {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .url-box input {
+      flex: 1;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 8px 12px;
+      color: #94a3b8;
+      font-size: 0.8rem;
+      outline: none;
+    }
+    .url-box button {
+      padding: 8px 14px;
+      background: #334155;
+      border: none;
+      border-radius: 8px;
+      color: #e2e8f0;
+      cursor: pointer;
+      font-size: 0.8rem;
+      transition: background .2s;
+      white-space: nowrap;
+    }
+    .url-box button:hover { background: #475569; }
+
+    #timer {
+      margin-top: 14px;
+      font-size: 0.8rem;
+      color: #64748b;
+    }
+    #timer span { color: #fbbf24; font-weight: 600; }
+
+    #resetBtn {
+      margin-top: 18px;
+      padding: 8px 20px;
+      background: transparent;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      color: #94a3b8;
+      cursor: pointer;
+      font-size: 0.85rem;
+      transition: all .2s;
+    }
+    #resetBtn:hover { border-color: #6366f1; color: #a5b4fc; }
+
+    /* ── Downloaded banner ── */
+    #downloaded {
+      display: none;
+      margin-top: 12px;
+      padding: 10px 16px;
+      background: #14532d;
+      border-radius: 8px;
+      color: #86efac;
+      font-size: 0.85rem;
+    }
+
+    /* ── Error ── */
+    #errorMsg {
+      display: none;
+      width: 100%;
+      max-width: 480px;
+      margin-top: 16px;
+      padding: 12px 16px;
+      background: #450a0a;
+      border-radius: 10px;
+      color: #fca5a5;
+      font-size: 0.85rem;
+    }
+
+    /* ── How it works ── */
+    .how {
+      width: 100%;
+      max-width: 480px;
+      margin-top: 32px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    .how-step {
+      background: #1e293b;
+      border-radius: 12px;
+      padding: 16px;
+      text-align: center;
+    }
+    .how-step .num { font-size: 1.5rem; margin-bottom: 6px; }
+    .how-step p { font-size: 0.78rem; color: #64748b; line-height: 1.4; }
+
+    footer { margin-top: 40px; color: #334155; font-size: 0.75rem; }
+
+    @media (max-width: 400px) {
+      .how { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>📡 QR File Transfer</h1>
+    <p>Share any file to any device on the same Wi-Fi — no app needed</p>
+  </header>
+
+  <!-- Drop zone -->
+  <div id="dropzone" onclick="document.getElementById('fileInput').click()">
+    <div class="icon">📂</div>
+    <h2>Drop a file here</h2>
+    <p>or click to browse</p>
+    <p style="margin-top:8px; color:#475569">Max 200 MB · Link expires in 15 min</p>
+    <button class="btn" onclick="event.stopPropagation(); document.getElementById('fileInput').click()">Choose File</button>
+    <input type="file" id="fileInput" />
+  </div>
+
+  <!-- Progress -->
+  <div id="progressWrap">
+    <div id="progressLabel">Preparing…</div>
+    <div id="progressBar"><div id="progressFill"></div></div>
+  </div>
+
+  <!-- Error -->
+  <div id="errorMsg"></div>
+
+  <!-- Result -->
+  <div id="result">
+    <h3>✅ Ready to scan!</h3>
+    <div class="filename" id="resultName"></div>
+
+    <img id="qrImg" alt="QR Code" />
+
+    <p style="font-size:0.8rem; color:#64748b; margin-bottom:8px">
+      Scan with any phone camera on the same Wi-Fi
+    </p>
+
+    <div class="url-box">
+      <input type="text" id="urlInput" readonly />
+      <button id="copyBtn" onclick="copyLink()">📋 Copy</button>
+    </div>
+
+    <div id="timer">Link expires in <span id="countdown">15:00</span></div>
+    <div id="downloaded">✅ File downloaded! Link is now invalid.</div>
+
+    <button id="resetBtn" onclick="reset()">Share another file</button>
+  </div>
+
+  <!-- How it works -->
+  <div class="how">
+    <div class="how-step">
+      <div class="num">1️⃣</div>
+      <p>Drop or choose a file on this page</p>
+    </div>
+    <div class="how-step">
+      <div class="num">2️⃣</div>
+      <p>A QR code appears — scan it with any phone</p>
+    </div>
+    <div class="how-step">
+      <div class="num">3️⃣</div>
+      <p>File downloads instantly, no app needed</p>
+    </div>
+  </div>
+
+  <footer>Both devices must be on the same Wi-Fi network</footer>
+
+  <script>
+    const dropzone     = document.getElementById('dropzone');
+    const fileInput    = document.getElementById('fileInput');
+    const progressWrap = document.getElementById('progressWrap');
+    const progressFill = document.getElementById('progressFill');
+    const progressLabel= document.getElementById('progressLabel');
+    const errorMsg     = document.getElementById('errorMsg');
+    const resultDiv    = document.getElementById('result');
+    const qrImg        = document.getElementById('qrImg');
+    const urlInput     = document.getElementById('urlInput');
+    const resultName   = document.getElementById('resultName');
+    const countdownEl  = document.getElementById('countdown');
+    const downloadedEl = document.getElementById('downloaded');
+
+    let countdownTimer = null;
+    let statusTimer    = null;
+    let currentToken   = null;
+
+    // ── Drag & Drop ──────────────────────────────────────────
+    dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
+    dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+    dropzone.addEventListener('drop', e => {
+      e.preventDefault();
+      dropzone.classList.remove('dragover');
+      const file = e.dataTransfer.files[0];
+      if (file) handleFile(file);
+    });
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files[0]) handleFile(fileInput.files[0]);
+    });
+
+    // ── Handle File ──────────────────────────────────────────
+    function handleFile(file) {
+      const MAX = 200 * 1024 * 1024;
+      if (file.size > MAX) {
+        showError(`File too large (${formatSize(file.size)}). Maximum is 200 MB.`);
+        return;
+      }
+
+      showError('');
+      showProgress('Reading file…', 0);
+
+      const reader = new FileReader();
+
+      reader.onprogress = e => {
+        if (e.lengthComputable) {
+          const pct = Math.round((e.loaded / e.total) * 50); // first 50% = reading
+          showProgress(`Reading: ${formatSize(e.loaded)} / ${formatSize(e.total)}`, pct);
+        }
+      };
+
+      reader.onload = () => {
+        const base64 = reader.result.split(',')[1];
+        showProgress('Uploading to server…', 55);
+        uploadFile(file.name, base64);
+      };
+
+      reader.onerror = () => showError('Could not read file.');
+      reader.readAsDataURL(file);
+    }
+
+    function uploadFile(name, base64) {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/upload');
+      xhr.setRequestHeader('Content-Type', 'application/json');
+
+      xhr.upload.onprogress = e => {
+        if (e.lengthComputable) {
+          const pct = 55 + Math.round((e.loaded / e.total) * 40);
+          showProgress(`Uploading… ${formatSize(e.loaded)} / ${formatSize(e.total)}`, pct);
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status === 200) {
+          const { url, token, expires } = JSON.parse(xhr.responseText);
+          showProgress('Done!', 100);
+          setTimeout(() => showResult(name, url, token, expires), 300);
+        } else {
+          const err = JSON.parse(xhr.responseText);
+          showError(err.error || 'Upload failed.');
+          hideProgress();
+        }
+      };
+
+      xhr.onerror = () => { showError('Network error. Is the server running?'); hideProgress(); };
+      xhr.send(JSON.stringify({ name, data: base64 }));
+    }
+
+    // ── Show Result ──────────────────────────────────────────
+    function showResult(name, url, token, expiresSeconds) {
+      hideProgress();
+      currentToken = token;
+
+      resultName.textContent = `📄 ${name}`;
+      urlInput.value = url;
+      downloadedEl.style.display = 'none';
+
+      // QR code via free API (works on internet-connected machines)
+      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&format=svg&ecc=M&data=${encodeURIComponent(url)}`;
+      qrImg.src = qrUrl;
+      qrImg.onerror = () => {
+        // Fallback: plain text QR placeholder if no internet
+        qrImg.style.display = 'none';
+        const fb = document.createElement('div');
+        fb.style.cssText = 'background:#fff;color:#000;padding:12px;border-radius:8px;font-size:11px;word-break:break-all;margin:0 auto 16px;max-width:200px;';
+        fb.textContent = '⚠️ QR failed to load (no internet). Use the link below.';
+        qrImg.parentNode.insertBefore(fb, qrImg.nextSibling);
+      };
+
+      resultDiv.style.display = 'block';
+      dropzone.style.display  = 'none';
+
+      // Countdown timer
+      let remaining = expiresSeconds;
+      clearInterval(countdownTimer);
+      countdownTimer = setInterval(() => {
+        remaining--;
+        if (remaining <= 0) { clearInterval(countdownTimer); countdownEl.textContent = 'Expired'; return; }
+        const m = Math.floor(remaining / 60).toString().padStart(2, '0');
+        const s = (remaining % 60).toString().padStart(2, '0');
+        countdownEl.textContent = `${m}:${s}`;
+      }, 1000);
+
+      // Poll for download completion
+      clearInterval(statusTimer);
+      statusTimer = setInterval(() => {
+        fetch(`/status/${token}`)
+          .then(r => r.json())
+          .then(d => {
+            if (!d.available) {
+              clearInterval(statusTimer);
+              clearInterval(countdownTimer);
+              downloadedEl.style.display = 'block';
+              countdownEl.textContent = 'Done';
+            }
+          }).catch(() => clearInterval(statusTimer));
+      }, 3000);
+    }
+
+    // ── Helpers ──────────────────────────────────────────────
+    function showProgress(label, pct) {
+      progressWrap.style.display = 'block';
+      progressLabel.textContent  = label;
+      progressFill.style.width   = pct + '%';
+    }
+    function hideProgress() { progressWrap.style.display = 'none'; }
+
+    function showError(msg) {
+      errorMsg.style.display = msg ? 'block' : 'none';
+      errorMsg.textContent   = msg;
+    }
+
+    function copyLink() {
+      navigator.clipboard.writeText(urlInput.value)
+        .then(() => { document.getElementById('copyBtn').textContent = '✅ Copied!'; setTimeout(() => document.getElementById('copyBtn').textContent = '📋 Copy', 2000); })
+        .catch(() => { urlInput.select(); document.execCommand('copy'); });
+    }
+
+    function reset() {
+      clearInterval(countdownTimer);
+      clearInterval(statusTimer);
+      resultDiv.style.display  = 'none';
+      dropzone.style.display   = 'block';
+      fileInput.value          = '';
+      qrImg.src                = '';
+      qrImg.style.display      = 'block';
+      currentToken             = null;
+    }
+
+    function formatSize(bytes) {
+      if (bytes < 1024)          return bytes + ' B';
+      if (bytes < 1024 * 1024)   return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+    }
+  </script>
+</body>
+</html>
