@@ -37,9 +37,9 @@ test('handles a one-block file', () => {
   assert.deepEqual(decoder.blocks[0], source[0]);
 });
 
-test('reconstructs a 2 MiB file with 1,800-byte symbols and missed QR frames', () => {
+test('reconstructs a 2 MiB file with 900-byte symbols and missed QR frames', () => {
   const fileSize = 2 * 1024 * 1024;
-  const blockSize = 1800;
+  const blockSize = 900;
   const sourceCount = Math.ceil(fileSize / blockSize);
   const sourceBlocks = Array.from({ length: sourceCount }, (_, index) => {
     const block = new Uint8Array(blockSize);
